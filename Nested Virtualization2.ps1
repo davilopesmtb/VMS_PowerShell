@@ -1,0 +1,1 @@
+﻿Set-VMProcessor -VMName "CLF - LAB1 - HOST02" -ExposeVirtualizationExtensions $true

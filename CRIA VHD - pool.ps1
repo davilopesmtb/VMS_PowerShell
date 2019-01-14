@@ -1,0 +1,1 @@
+﻿#Comando para criar máquinas virtuais do laboratório 1 de cluster#Defina na variável a baixo o nome da VM$nome = "HOST01"$vmname = "CLF - LAB1 - HOST01"$vhd04 = "D:\Hyper-V\STORAGE\CLF-LAB1-$nome-DISCO04-st.vhdx"New-VHD -Path $vhd04 -SizeBytes 127gb -Dynamic Get-VM $vmname | Add-VMHardDiskDrive -Path $vhd04 -ControllerType SCSI -ControllerNumber 0
