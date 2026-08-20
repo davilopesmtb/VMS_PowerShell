@@ -6,7 +6,8 @@
 
 .DESCRIPTION
     Substitui a sequência de InputBox por uma única janela (Windows Forms) com
-    todos os campos: nome, memória, processadores, switch, caminhos e opções.
+    todos os campos: nome, memória (inicial, mínima e máxima), processadores,
+    switch, caminhos e opções.
     Nada é criado no host enquanto o formulário não for confirmado.
 
     O disco do sistema é criado como disco de diferenciação a partir de um
@@ -24,8 +25,11 @@ Add-Type -AssemblyName System.Drawing
 # Padrões: ajuste aqui os valores iniciais do formulário
 # ---------------------------------------------------------------------------
 $padrao = @{
-    Prefixo  = 'SRV2025'
-    MemoriaGB = 4
+    Prefixo   = 'SRV2025'
+    StartupGB = 4
+    MinimaGB  = 1
+    MaximaGB  = 8
+    Dinamica  = $false
     Cores     = 2
     DiscoPai  = 'C:\HYPERV\VHD_Modelo\WS-2025-MODEL.vhdx'
     PastaVHD  = 'C:\HYPERV\VHD'
@@ -35,21 +39,34 @@ $padrao = @{
 # ---------------------------------------------------------------------------
 # Dados do host (usados para limitar os campos numéricos)
 # ---------------------------------------------------------------------------
-$cs        = Get-CimInstance Win32_ComputerSystem
-$maxCores  = [int]$cs.NumberOfLogicalProcessors
-$maxRamGB  = [int][math]::Floor($cs.TotalPhysicalMemory / 1GB)
-$switches  = @(Get-VMSwitch | Select-Object -ExpandProperty Name | Sort-Object)
+$cs       = Get-CimInstance Win32_ComputerSystem
+$maxCores = [int]$cs.NumberOfLogicalProcessors
+$maxRamGB = [int][math]::Floor($cs.TotalPhysicalMemory / 1GB)
+$switches = @(Get-VMSwitch | Select-Object -ExpandProperty Name | Sort-Object)
 
 # ---------------------------------------------------------------------------
-# Helpers de layout
+# Helpers
 # ---------------------------------------------------------------------------
 function New-Rotulo {
-    param([string]$Texto, [int]$Y)
+    param([string]$Texto, [int]$X, [int]$Y, [int]$Largura = 140)
     $l = New-Object System.Windows.Forms.Label
     $l.Text     = $Texto
-    $l.Location = New-Object System.Drawing.Point(12, ($Y + 3))
-    $l.Size     = New-Object System.Drawing.Size(140, 20)
+    $l.Location = New-Object System.Drawing.Point($X, ($Y + 3))
+    $l.Size     = New-Object System.Drawing.Size($Largura, 20)
     return $l
+}
+
+function New-CampoGB {
+    param([int]$X, [int]$Y, [decimal]$Valor, [int]$MaximoGB)
+    $n = New-Object System.Windows.Forms.NumericUpDown
+    $n.Location      = New-Object System.Drawing.Point($X, $Y)
+    $n.Size          = New-Object System.Drawing.Size(65, 23)
+    $n.DecimalPlaces = 1
+    $n.Increment     = 0.5
+    $n.Minimum       = 0.5
+    $n.Maximum       = [math]::Max(0.5, $MaximoGB)
+    $n.Value         = [math]::Min($Valor, $n.Maximum)
+    return $n
 }
 
 function New-BotaoProcurar {
@@ -61,12 +78,19 @@ function New-BotaoProcurar {
     return $b
 }
 
+# Hyper-V trabalha com múltiplos de 2 MB
+function ConvertTo-BytesMemoria {
+    param([decimal]$GB)
+    $bytes = [int64]($GB * 1GB)
+    return [int64]([math]::Round($bytes / 2MB) * 2MB)
+}
+
 # ---------------------------------------------------------------------------
-# Formulario
+# Formulário
 # ---------------------------------------------------------------------------
 $form                 = New-Object System.Windows.Forms.Form
 $form.Text            = 'Criação de VM - Hyper-V'
-$form.Size            = New-Object System.Drawing.Size(570, 505)
+$form.Size            = New-Object System.Drawing.Size(570, 590)
 $form.StartPosition   = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox     = $false
@@ -78,7 +102,7 @@ $y = 15
 $txtNome          = New-Object System.Windows.Forms.TextBox
 $txtNome.Location = New-Object System.Drawing.Point(155, $y)
 $txtNome.Size     = New-Object System.Drawing.Size(385, 23)
-$form.Controls.AddRange(@((New-Rotulo 'Nome da VM:' $y), $txtNome))
+$form.Controls.AddRange(@((New-Rotulo 'Nome da VM:' 12 $y), $txtNome))
 
 # --- Prefixo ---------------------------------------------------------------
 $y = 45
@@ -86,38 +110,23 @@ $txtPrefixo          = New-Object System.Windows.Forms.TextBox
 $txtPrefixo.Location = New-Object System.Drawing.Point(155, $y)
 $txtPrefixo.Size     = New-Object System.Drawing.Size(150, 23)
 $txtPrefixo.Text     = $padrao.Prefixo
-$form.Controls.AddRange(@((New-Rotulo 'Prefixo:' $y), $txtPrefixo))
-
-# --- Memoria ---------------------------------------------------------------
-$y = 75
-$numRam          = New-Object System.Windows.Forms.NumericUpDown
-$numRam.Location = New-Object System.Drawing.Point(155, $y)
-$numRam.Size     = New-Object System.Drawing.Size(80, 23)
-$numRam.Minimum  = 1
-$numRam.Maximum  = [math]::Max(1, $maxRamGB)
-$numRam.Value    = [math]::Min($padrao.MemoriaGB, $numRam.Maximum)
-$lblRamHost      = New-Object System.Windows.Forms.Label
-$lblRamHost.Text = "GB   (host: $maxRamGB GB)"
-$lblRamHost.Location = New-Object System.Drawing.Point(240, ($y + 3))
-$lblRamHost.Size     = New-Object System.Drawing.Size(200, 20)
-$form.Controls.AddRange(@((New-Rotulo 'Memória RAM:' $y), $numRam, $lblRamHost))
+$form.Controls.AddRange(@((New-Rotulo 'Prefixo:' 12 $y), $txtPrefixo))
 
 # --- Processadores ---------------------------------------------------------
-$y = 105
+$y = 75
 $numCores          = New-Object System.Windows.Forms.NumericUpDown
 $numCores.Location = New-Object System.Drawing.Point(155, $y)
 $numCores.Size     = New-Object System.Drawing.Size(80, 23)
 $numCores.Minimum  = 1
 $numCores.Maximum  = $maxCores
 $numCores.Value    = [math]::Min($padrao.Cores, $maxCores)
-$lblCoresHost      = New-Object System.Windows.Forms.Label
-$lblCoresHost.Text = "(host: $maxCores lógicos)"
-$lblCoresHost.Location = New-Object System.Drawing.Point(240, ($y + 3))
-$lblCoresHost.Size     = New-Object System.Drawing.Size(200, 20)
-$form.Controls.AddRange(@((New-Rotulo 'Processadores:' $y), $numCores, $lblCoresHost))
+$form.Controls.AddRange(@(
+    (New-Rotulo 'Processadores:' 12 $y),
+    $numCores,
+    (New-Rotulo "(host: $maxCores lógicos)" 240 $y 200)))
 
 # --- Switch ----------------------------------------------------------------
-$y = 135
+$y = 105
 $cboSwitch               = New-Object System.Windows.Forms.ComboBox
 $cboSwitch.Location      = New-Object System.Drawing.Point(155, $y)
 $cboSwitch.Size          = New-Object System.Drawing.Size(385, 23)
@@ -126,10 +135,10 @@ if ($switches.Count -gt 0) {
     [void]$cboSwitch.Items.AddRange($switches)
     $cboSwitch.SelectedIndex = 0
 }
-$form.Controls.AddRange(@((New-Rotulo 'Switch virtual:' $y), $cboSwitch))
+$form.Controls.AddRange(@((New-Rotulo 'Switch virtual:' 12 $y), $cboSwitch))
 
 # --- Disco pai -------------------------------------------------------------
-$y = 165
+$y = 135
 $txtDiscoPai          = New-Object System.Windows.Forms.TextBox
 $txtDiscoPai.Location = New-Object System.Drawing.Point(155, $y)
 $txtDiscoPai.Size     = New-Object System.Drawing.Size(340, 23)
@@ -145,10 +154,10 @@ $btnDiscoPai.Add_Click({
         $txtDiscoPai.Text = $dlg.FileName
     }
 })
-$form.Controls.AddRange(@((New-Rotulo 'Disco pai (modelo):' $y), $txtDiscoPai, $btnDiscoPai))
+$form.Controls.AddRange(@((New-Rotulo 'Disco pai (modelo):' 12 $y), $txtDiscoPai, $btnDiscoPai))
 
 # --- Pasta dos VHDs --------------------------------------------------------
-$y = 195
+$y = 165
 $txtPastaVHD          = New-Object System.Windows.Forms.TextBox
 $txtPastaVHD.Location = New-Object System.Drawing.Point(155, $y)
 $txtPastaVHD.Size     = New-Object System.Drawing.Size(340, 23)
@@ -161,10 +170,10 @@ $btnPastaVHD.Add_Click({
         $txtPastaVHD.Text = $dlg.SelectedPath
     }
 })
-$form.Controls.AddRange(@((New-Rotulo 'Pasta dos VHDs:' $y), $txtPastaVHD, $btnPastaVHD))
+$form.Controls.AddRange(@((New-Rotulo 'Pasta dos VHDs:' 12 $y), $txtPastaVHD, $btnPastaVHD))
 
 # --- Pasta das VMs ---------------------------------------------------------
-$y = 225
+$y = 195
 $txtPastaVM          = New-Object System.Windows.Forms.TextBox
 $txtPastaVM.Location = New-Object System.Drawing.Point(155, $y)
 $txtPastaVM.Size     = New-Object System.Drawing.Size(340, 23)
@@ -177,12 +186,41 @@ $btnPastaVM.Add_Click({
         $txtPastaVM.Text = $dlg.SelectedPath
     }
 })
-$form.Controls.AddRange(@((New-Rotulo 'Pasta das VMs:' $y), $txtPastaVM, $btnPastaVM))
+$form.Controls.AddRange(@((New-Rotulo 'Pasta das VMs:' 12 $y), $txtPastaVM, $btnPastaVM))
+
+# --- Memória ---------------------------------------------------------------
+$grpMem          = New-Object System.Windows.Forms.GroupBox
+$grpMem.Text     = 'Memória'
+$grpMem.Location = New-Object System.Drawing.Point(12, 228)
+$grpMem.Size     = New-Object System.Drawing.Size(528, 105)
+
+$chkDinamica          = New-Object System.Windows.Forms.CheckBox
+$chkDinamica.Text     = 'Memória dinâmica'
+$chkDinamica.Location = New-Object System.Drawing.Point(15, 22)
+$chkDinamica.Size     = New-Object System.Drawing.Size(200, 22)
+$chkDinamica.Checked  = $padrao.Dinamica
+
+$numStartup = New-CampoGB 90  50 $padrao.StartupGB $maxRamGB
+$numMin     = New-CampoGB 250 50 $padrao.MinimaGB  $maxRamGB
+$numMax     = New-CampoGB 410 50 $padrao.MaximaGB  $maxRamGB
+
+$lblMemInfo          = New-Object System.Windows.Forms.Label
+$lblMemInfo.Location = New-Object System.Drawing.Point(15, 78)
+$lblMemInfo.Size     = New-Object System.Drawing.Size(500, 20)
+$lblMemInfo.ForeColor = [System.Drawing.Color]::DimGray
+
+$grpMem.Controls.AddRange(@(
+    $chkDinamica,
+    (New-Rotulo 'Inicial (GB):' 15  50 75), $numStartup,
+    (New-Rotulo 'Mínima (GB):' 175 50 75), $numMin,
+    (New-Rotulo 'Máxima (GB):' 335 50 75), $numMax,
+    $lblMemInfo))
+$form.Controls.Add($grpMem)
 
 # --- Opções ----------------------------------------------------------------
 $grp          = New-Object System.Windows.Forms.GroupBox
 $grp.Text     = 'Opções'
-$grp.Location = New-Object System.Drawing.Point(12, 260)
+$grp.Location = New-Object System.Drawing.Point(12, 343)
 $grp.Size     = New-Object System.Drawing.Size(528, 105)
 
 $chkNested          = New-Object System.Windows.Forms.CheckBox
@@ -223,9 +261,28 @@ $chkIniciar.Size     = New-Object System.Drawing.Size(230, 22)
 $grp.Controls.AddRange(@($chkNested, $chkMac, $chkGuest, $chkProducao, $chkAutoChk, $chkIniciar))
 $form.Controls.Add($grp)
 
+# --- Regras entre memória e virtualização aninhada -------------------------
+# A virtualização aninhada exige memória estática, então ela desliga (e trava)
+# a memória dinâmica; os campos mínima/máxima só valem no modo dinâmico.
+$atualizarMemoria = {
+    if ($chkNested.Checked) {
+        $chkDinamica.Checked = $false
+        $chkDinamica.Enabled = $false
+        $lblMemInfo.Text = "Host: $maxRamGB GB. A virtualização aninhada exige memória estática."
+    } else {
+        $chkDinamica.Enabled = $true
+        $lblMemInfo.Text = "Host: $maxRamGB GB."
+    }
+    $numMin.Enabled = $chkDinamica.Checked
+    $numMax.Enabled = $chkDinamica.Checked
+}
+$chkNested.Add_CheckedChanged($atualizarMemoria)
+$chkDinamica.Add_CheckedChanged($atualizarMemoria)
+& $atualizarMemoria
+
 # --- Prévia ----------------------------------------------------------------
 $lblPreview           = New-Object System.Windows.Forms.Label
-$lblPreview.Location  = New-Object System.Drawing.Point(12, 375)
+$lblPreview.Location  = New-Object System.Drawing.Point(12, 458)
 $lblPreview.Size      = New-Object System.Drawing.Size(528, 40)
 $lblPreview.ForeColor = [System.Drawing.Color]::DimGray
 
@@ -249,12 +306,12 @@ $form.Controls.Add($lblPreview)
 # --- Botões ----------------------------------------------------------------
 $btnOk          = New-Object System.Windows.Forms.Button
 $btnOk.Text     = 'Criar VM'
-$btnOk.Location = New-Object System.Drawing.Point(340, 425)
+$btnOk.Location = New-Object System.Drawing.Point(340, 505)
 $btnOk.Size     = New-Object System.Drawing.Size(95, 30)
 
 $btnCancel              = New-Object System.Windows.Forms.Button
 $btnCancel.Text         = 'Cancelar'
-$btnCancel.Location     = New-Object System.Drawing.Point(445, 425)
+$btnCancel.Location     = New-Object System.Drawing.Point(445, 505)
 $btnCancel.Size         = New-Object System.Drawing.Size(95, 30)
 $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
 
@@ -271,6 +328,15 @@ $btnOk.Add_Click({
     }
 
     if (-not $cboSwitch.SelectedItem) { $erros.Add('Nenhum switch virtual selecionado.') }
+
+    if ($chkDinamica.Checked) {
+        if ($numMin.Value -gt $numStartup.Value) {
+            $erros.Add('A memória mínima não pode ser maior que a inicial.')
+        }
+        if ($numMax.Value -lt $numStartup.Value) {
+            $erros.Add('A memória máxima não pode ser menor que a inicial.')
+        }
+    }
 
     if (-not (Test-Path -LiteralPath $txtDiscoPai.Text)) {
         $erros.Add("Disco pai não encontrado: $($txtDiscoPai.Text)")
@@ -315,8 +381,12 @@ $discoPai = $txtDiscoPai.Text
 $pastaVM  = $txtPastaVM.Text
 $pastaVHD = $txtPastaVHD.Text
 $switch   = [string]$cboSwitch.SelectedItem
-[int64]$memoria = 1GB * [int]$numRam.Value
-[int]$cores     = [int]$numCores.Value
+$dinamica = $chkDinamica.Checked
+[int]$cores = [int]$numCores.Value
+
+$memStartup = ConvertTo-BytesMemoria $numStartup.Value
+$memMin     = ConvertTo-BytesMemoria $numMin.Value
+$memMax     = ConvertTo-BytesMemoria $numMax.Value
 
 # ---------------------------------------------------------------------------
 # Criação
@@ -332,12 +402,19 @@ try {
     New-VHD -Path $vhd -ParentPath $discoPai -Differencing | Out-Null
     $vhdCriado = $true
 
-    $vm = New-VM -Name $vmName -MemoryStartupBytes $memoria -Path $pastaVM `
+    $vm = New-VM -Name $vmName -MemoryStartupBytes $memStartup -Path $pastaVM `
                  -Generation 2 -VHDPath $vhd -SwitchName $switch
 
+    # memória antes do processador: a virtualização aninhada só é aceita
+    # com memória dinâmica desligada
+    if ($dinamica) {
+        Set-VMMemory -VM $vm -DynamicMemoryEnabled $true `
+                     -StartupBytes $memStartup -MinimumBytes $memMin -MaximumBytes $memMax
+    } else {
+        Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes $memStartup
+    }
+
     if ($chkNested.Checked) {
-        # a virtualização aninhada exige memória estática
-        Set-VMMemory    -VM $vm -DynamicMemoryEnabled $false
         Set-VMProcessor -VM $vm -Count $cores -ExposeVirtualizationExtensions $true
     } else {
         Set-VMProcessor -VM $vm -Count $cores
@@ -356,9 +433,15 @@ try {
     }
     if ($chkIniciar.Checked) { Start-VM -VM $vm }
 
+    $descMemoria = if ($dinamica) {
+        "dinâmica - inicial $($numStartup.Value) GB, mín. $($numMin.Value) GB, máx. $($numMax.Value) GB"
+    } else {
+        "estática - $($numStartup.Value) GB"
+    }
+
     $resumo = @(
         "VM:            $vmName"
-        "Memória:       $($numRam.Value) GB"
+        "Memória:       $descMemoria"
         "Processadores: $cores"
         "Switch:        $switch"
         "VHDX:          $vhd"
